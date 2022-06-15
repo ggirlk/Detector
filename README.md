@@ -3,7 +3,7 @@
 ## 👩‍💻 Intro
 This is a personal project made by me
 
-## 💿 Instalation
+## 💿 Installation
 
 `$ git clone https://github.com/ggirlk/Detector.git`
 
