@@ -1,12 +1,12 @@
-#include <opencv2/opencv.hpp>
-
 #include "detector.hpp"
-#include "window.hpp"
+
+#include "globals.hpp"
+
+#include "drawLandmarks.hpp"
 
 using namespace std;
 using namespace cv;
 using namespace dnn;
-
 
 /*************/
 vector<string> classes; // will contain Model classes
@@ -21,11 +21,27 @@ int inpWidth = 416;  // Width of network's input image
 int inpHeight = 416; // Height of network's input image
 
 bool detect = false;
+bool DetectVisionAxis = false;
+bool trackFaces = false;
+bool detectEyes = false;
+bool DetectLandMarks = false;
+
 string device = "CPU"; // or GPU
-string modelConfiguration = "src/yolov3.cfg";
-string modelWeights = "src/yolov3.weights";
-//Net myNet = readNetFromDarknet(modelConfiguration, modelWeights);
+string modelConfiguration = "src/yolo/yolov3.cfg";
+string modelWeights = "src/yolo/yolov3.weights";
+string classesFile = "src/yolo/coco.names";
+
 Net myNet = readNetFromDarknet(modelConfiguration, modelWeights);
+
+CascadeClassifier face_cascade;
+CascadeClassifier eyes_cascade;
+// Create an instance of Facemark
+Ptr<Facemark> facemark = FacemarkLBF::create();
+
+String lbfmodelFile = "src/cascade/lbfmodel.yaml";
+String face_cascade_name = "src/cascade/haarcascade_frontalface_alt2.xml";
+String eyes_cascade_name = "src/cascade/haarcascade_eye.xml";
+
 // Remove the bounding boxes with low confidence using non-maxima suppression
 void postprocess(Mat& frame, const vector<Mat>& outs)
 {
@@ -33,7 +49,6 @@ void postprocess(Mat& frame, const vector<Mat>& outs)
     vector<float> confidences;
     vector<Rect> boxes;
 
-  
     for (size_t i = 0; i < outs.size(); ++i)
     {
         // Scan through all the bounding boxes output from the network and keep only the
@@ -64,19 +79,6 @@ void postprocess(Mat& frame, const vector<Mat>& outs)
         }
     }
     
-    Mat outDetections = outs[0];
-    Mat outMasks = outs[0];
- 
-    // Output size of masks is NxCxHxW where
-    // N - number of detected boxes
-    // C - number of classes (excluding background)
-
-    // HxW - segmentation shape
-
-    //const int numDetections = outDetections.size[2];
-
-    //const int numClasses = outMasks.size[1];
-
     // Perform non maximum suppression to eliminate redundant overlapping boxes with
     // lower confidences
 
@@ -88,45 +90,9 @@ void postprocess(Mat& frame, const vector<Mat>& outs)
         Rect box = boxes[idx];
         drawPred(classIds[idx], confidences[idx], box.x, box.y,
                  box.x + box.width, box.y + box.height, frame, colors[classIds[idx]]);
-        //cout << colors[idx] << " idx: " << classIds[idx] << endl;
-		/********
-        // Extract the mask for the object
-        Mat objectMask(box.width, box.height,CV_32F, outMasks.ptr<float>(i,idx));
-        //drawBox(frame, classId, score, box, objectMask);   
-        // Resize the mask, threshold, color and apply it on the image
-	    //resize(objectMask, objectMask, Size(box.width, box.height), 0, 0, cv::INTER_LINEAR);
-        cout << "heeeere" << endl;
-
-	    Mat mask = (objectMask > maskThreshold);
-	    Mat coloredRoi = (0.3 * colors[idx] + 0.7 * frame(box));
-	    coloredRoi.convertTo(coloredRoi, CV_8UC3);
-
-	    // Draw the contours on the image
-	    vector<Mat> contours;
-	    Mat hierarchy;
-	    mask.convertTo(mask, CV_8U);
-	    findContours(mask, contours, hierarchy, RETR_CCOMP, CHAIN_APPROX_SIMPLE);
-	    drawContours(coloredRoi, contours, -1, colors[idx], 5, LINE_8, hierarchy, 100);
-	    coloredRoi.copyTo(frame(box), mask); */    
-        
     }
 }
-void drawBox(Mat& frame, int classId, float conf, Rect box, Mat& objectMask)
-{
-	/*// Resize the mask, threshold, color and apply it on the image
-    resize(objectMask, objectMask, Size(box.width, box.height));
-    Mat mask = (objectMask > maskThreshold);
-    Mat coloredRoi = (0.3 * colors[idx] + 0.7 * frame(box));
-    coloredRoi.convertTo(coloredRoi, CV_8UC3);
 
-    // Draw the contours on the image
-    vector<Mat> contours;
-    Mat hierarchy;
-    mask.convertTo(mask, CV_8U);
-    findContours(mask, contours, hierarchy, RETR_CCOMP, CHAIN_APPROX_SIMPLE);
-    drawContours(coloredRoi, contours, -1, colors[idx], 5, LINE_8, hierarchy, 100);
-    coloredRoi.copyTo(frame(box), mask);*/
-}
 // Draw the predicted bounding box
 void drawPred(int classId, float conf, int left, int top,
 	int right, int bottom, Mat& frame, Scalar color)
@@ -172,6 +138,7 @@ vector<String> getOutputsNames(const Net& net)
     }
     return names;
 }
+
 /*************/
 
 CameraDrawingArea::CameraDrawingArea():
@@ -213,7 +180,7 @@ void CameraDrawingArea::on_size_allocate (Gtk::Allocation& allocation) {
 	width = allocation.get_width();
 	height = allocation.get_height();
 
-	string classesFile = "src/coco.names";
+	// Get the classes names, and generate colors for each class
 	ifstream ifs(classesFile.c_str());
 	string line;
 	while (getline(ifs, line))
@@ -226,12 +193,13 @@ void CameraDrawingArea::on_size_allocate (Gtk::Allocation& allocation) {
 		);
 		colors.push_back(color);
 	}
-	
+	// Set Backend
 	if (device == "CPU")
     {
         cout << "Using CPU device" << endl;
-		myNet.setPreferableBackend(DNN_BACKEND_OPENCV);
+		//myNet.setPreferableBackend(DNN_BACKEND_OPENCV);
         myNet.setPreferableBackend(DNN_TARGET_CPU);
+        myNet.setPreferableTarget(0);
     }
     else if (device == "GPU")
     {
@@ -239,23 +207,22 @@ void CameraDrawingArea::on_size_allocate (Gtk::Allocation& allocation) {
         myNet.setPreferableBackend(DNN_BACKEND_CUDA);
         myNet.setPreferableTarget(DNN_TARGET_CUDA);
     }
+
+    //-- 1. Load the cascades
+    if( !face_cascade.load( face_cascade_name ) )
+    {
+        cout << "--(!)Error loading face cascade\n";
+        exit(1);
+    };
+    if( !eyes_cascade.load( eyes_cascade_name ) )
+    {
+        cout << "--(!)Error loading eyes cascade\n";
+        exit(1);
+    };
+    // Load landmark detector
+   facemark->loadModel(lbfmodelFile);
 }
-/**
- * startDetecting - Click button function to Start detecting.
- * 
- * Return: nothing
- */
-void MainWindow::startDetecting() {
-	detect = true;
-}
-/**
- * stopDetecting - Click button function to Stop detecting.
- * 
- * Return: nothing
- */
-void MainWindow::stopDetecting() {
-	detect = false;
-}
+
 /**
  * on_draw - Called every time the widget needs to be redrawn.
  * 			 This happens when the Widget got resized, or obscured by
@@ -263,6 +230,9 @@ void MainWindow::stopDetecting() {
  * @cr: Cairo context
  * Return: true or false
  */
+cv::Mat frame, eye_tpl;
+cv::Rect eye_bb;
+
 bool CameraDrawingArea::on_draw(const Cairo::RefPtr<Cairo::Context>& cr) {
 	
 	// Prevent the drawing if size is 0:
@@ -276,14 +246,164 @@ bool CameraDrawingArea::on_draw(const Cairo::RefPtr<Cairo::Context>& cr) {
 	cvtColor(webcam, webcam, COLOR_BGR2RGB);
 	// Resize it to the allocated size of the Widget.
 	resize(webcam, output, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
-    
+/*
+	if (GBlure)
+	{
+		GaussianBlur(output, output, Size(5,5), 3, 3);
+	}
+    if (CannyF)
+    {
+    	cvtColor(output, output, COLOR_BGR2GRAY);
+    	Canny(output, output, 10, 100, 3, true);
+    }*/
+    vector<Rect> faces;
+
+	if (detectEyes || DetectLandMarks || DetectVisionAxis)
+	{
+	  // Variable to store a video frame and its grayscale 
+	  Mat gray;
+
+      // Convert frame to grayscale because
+      // face_cascade.load requires grayscale image.
+      cvtColor(output, gray, COLOR_BGR2GRAY);
+
+      // Detect faces
+      face_cascade.detectMultiScale(gray, faces);
+      if (detectEyes)
+      {
+	    equalizeHist( gray, gray );
+
+	    for ( size_t i = 0; i < faces.size(); i++ )
+	    {
+	        std::vector<cv::Point2d> image_points;
+
+	        Point center( faces[i].x + faces[i].width/2, faces[i].y + faces[i].height/2 );
+	        //ellipse( output, center, Size( faces[i].width/2, faces[i].height/2 ), 0, 0, 360, Scalar( 255, 0, 255 ), 1 );
+	        Mat faceROI = gray( faces[i] );
+	        //-- In each face, detect eyes
+	        vector<Rect> eyes;
+	        eyes_cascade.detectMultiScale( faceROI, eyes );
+	        for ( size_t j = 0; j < eyes.size(); j++ )
+	        {
+	            Point eye_center( faces[i].x + eyes[j].x + eyes[j].width/2, faces[i].y + eyes[j].y + eyes[j].height/2 );
+	            int radius = 8;// cvRound( (eyes[j].width + eyes[j].height)*0.10 );
+	            circle( output, eye_center, radius, Scalar( 255, 0, 0 ), 1 );
+	        }
+
+	    }
+	  }
+
+      // Variable for landmarks. 
+      // Landmarks for one face is a vector of points
+      // There can be more than one face in the image. Hence, we 
+      // use a vector of vector of points. 
+      vector< vector<Point2f> > landmarks;
+      
+      // Run landmark detector
+      bool success = facemark->fit(output,faces,landmarks);
+      
+      if(success)
+      {
+        // If successful, render the landmarks on the face
+      	if (DetectLandMarks)
+        {
+        	for(size_t i = 0; i < landmarks.size(); i++)
+                {
+                  drawLandmarks(output, landmarks[i]);
+                }
+        }
+        if (DetectVisionAxis)
+        {
+        	for(size_t i = 0; i < landmarks.size(); i++)
+            {
+
+			    // 2D image points. If you change the image, you need to change vector
+
+			    std::vector<cv::Point2d> image_points;
+
+			    image_points.push_back( cv::Point2d(landmarks[i][30]) );    // Nose tip
+
+			    image_points.push_back( cv::Point2d(landmarks[i][8]) );    // Chin
+
+			    image_points.push_back( cv::Point2d(landmarks[i][36]) );     // Left eye left corner
+
+			    image_points.push_back( cv::Point2d(landmarks[i][45]) );    // Right eye right corner
+
+			    image_points.push_back( cv::Point2d(landmarks[i][48]) );    // Left Mouth corner
+
+			    image_points.push_back( cv::Point2d(landmarks[i][54]) );    // Right mouth corner
+			 
+
+			    // 3D model points.
+
+			    std::vector<cv::Point3d> model_points;
+
+			    model_points.push_back(cv::Point3d(0.0f, 0.0f, 0.0f));               // Nose tip
+
+			    model_points.push_back(cv::Point3d(0.0f, -330.0f, -65.0f));          // Chin
+
+			    model_points.push_back(cv::Point3d(-225.0f, 170.0f, -135.0f));       // Left eye left corner
+
+			    model_points.push_back(cv::Point3d(225.0f, 170.0f, -135.0f));        // Right eye right corner
+
+			    model_points.push_back(cv::Point3d(-150.0f, -150.0f, -125.0f));      // Left Mouth corner
+
+			    model_points.push_back(cv::Point3d(150.0f, -150.0f, -125.0f));       // Right mouth corner
+
+		        // Camera internals
+
+			    double focal_length = output.cols; // Approximate focal length.
+
+			    Point2d center = cv::Point2d(output.cols/2,output.rows/2);
+
+			    cv::Mat camera_matrix = (cv::Mat_<double>(3,3) << focal_length, 0, center.x, 0 , focal_length, center.y, 0, 0, 1);
+
+			    cv::Mat dist_coeffs = cv::Mat::zeros(4,1,cv::DataType<double>::type); // Assuming no lens distortion
+
+			    //cout << "Camera Matrix " << endl << camera_matrix << endl ;
+
+			    // Output rotation and translation
+
+			    cv::Mat rotation_vector; // Rotation in axis-angle form
+
+			    cv::Mat translation_vector;
+
+			    // Solve for pose
+
+			    cv::solvePnP(model_points, image_points, camera_matrix, dist_coeffs, rotation_vector, translation_vector);
+
+			    // Project a 3D point (0, 0, 1000.0) onto the image plane.
+
+			    // We use this to draw a line sticking out of the nose
+
+			    vector<Point3d> nose_end_point3D;
+
+			    vector<Point2d> nose_end_point2D;
+
+			    nose_end_point3D.push_back(Point3d(0,0,1000.0));
+
+			    projectPoints(nose_end_point3D, rotation_vector, translation_vector, camera_matrix, dist_coeffs, nose_end_point2D);
+			    for(size_t i=0; i < image_points.size(); i++)
+			    	circle(output, image_points[i], 3, Scalar(0,0,255), -1);
+
+			    //cout << image_points[0] << endl;
+			    cv::line(output,image_points[0], nose_end_point2D[0], cv::Scalar(255,0,0), 2);
+			    circle(output, nose_end_point2D[0], 3, Scalar(0,255,0), -1);
+			}
+
+        }
+   	 }
+
+    }
 	if (detect) {
+		resize(webcam, output, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
+
 		Mat frame, blob;
 		VideoWriter video;
 		string outputFile = "yolo_out_cpp.avi";
 
 		blobFromImage(output, blob, 1/255.0, cv::Size(inpWidth, inpHeight), Scalar(0,0,0), true, false);
-	        
+
 		//cout << "booom\n";
 	    //Sets the input to the network
 	    myNet.setInput(blob);
@@ -299,7 +419,7 @@ bool CameraDrawingArea::on_draw(const Cairo::RefPtr<Cairo::Context>& cr) {
 	    vector<double> layersTimes;
 	    double freq = getTickFrequency() / 1000;
 	    double t = myNet.getPerfProfile(layersTimes) / freq;
-	    string label = format("Inference time for a output : %.2f ms", t);
+	    string label = format("Inference time for a frame : %.2f ms", t);
 	    //rectangle(output, (startX, startY), (endX, endY),
 		//		COLORS[idx], 2)
 
@@ -328,3 +448,5 @@ bool CameraDrawingArea::on_draw(const Cairo::RefPtr<Cairo::Context>& cr) {
 	// Don't stop calling me.
 	return true;
 }
+
+

@@ -17,12 +17,17 @@ protected:
 	bool on_key_press_event(GdkEventKey* event) override;
     
 private:
-	void startDetecting();
-	void stopDetecting();
-	bool probablyInFullScreen;
+	void objectDetection();
+	void eyesDetection();
+	void landmarksDetection();
+	void directionsDetection();
 
-	Gtk::Button m_button_start;
-	Gtk::Button m_button_stop;
+	bool probablyInFullScreen;
+	Gtk::Button m_button_objects;
+	Gtk::Button m_button_eyes;
+	Gtk::Button m_button_landmarks;
+	Gtk::Button m_button_directions;
+	Gtk::ButtonBox m_box_btns;
 	Gtk::Box m_box;
 	CameraDrawingArea cameraDrawingArea;
 };
